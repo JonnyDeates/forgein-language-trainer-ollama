@@ -1,96 +1,216 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const mainView = document.getElementById('mainView');
+    const settingsView = document.getElementById('settingsView');
+    const settingsToggle = document.getElementById('settingsToggle');
+    const headerTitle = document.getElementById('headerTitle');
+
     const enabledInput = document.getElementById('enabled');
-    const scopeSelect = document.getElementById('scope');
-    const displayModeSelect = document.getElementById('displayMode');
-    const percentageInput = document.getElementById('percentage');
-    const modelSelect = document.getElementById('model');
     const langInput = document.getElementById('language');
-    const saveBtn = document.getElementById('save');
-    const statusDiv = document.getElementById('status');
+    const scopeSelect = document.getElementById('scope');
+    const allowDuplicatesInput = document.getElementById('allowDuplicates'); // New
+    const percentageInput = document.getElementById('percentage');
+    const displayModeSelect = document.getElementById('displayMode');
+    const saveMainBtn = document.getElementById('saveMain');
+    const statusMain = document.getElementById('statusMain');
 
-    // 1. Load saved settings
-    chrome.storage.local.get(['enabled', 'scope', 'displayMode', 'percentage', 'model', 'language'], (result) => {
-        if (result.enabled !== undefined) enabledInput.checked = result.enabled;
-        if (result.scope) scopeSelect.value = result.scope;
-        if (result.displayMode) displayModeSelect.value = result.displayMode;
-        if (result.percentage) percentageInput.value = result.percentage;
-        if (result.language) langInput.value = result.language;
+    const providerSelect = document.getElementById('provider');
+    const endpointInput = document.getElementById('endpoint');
+    const apiKeyInput = document.getElementById('apiKey');
+    const apiKeyField = document.querySelector('.api-key-field');
+    const modelInput = document.getElementById('modelInput');
+    const modelSelect = document.getElementById('modelSelect');
+    const toggleManualBtn = document.getElementById('toggleManual');
+    const fetchModelsBtn = document.getElementById('fetchModels');
+    const customPromptInput = document.getElementById('customPrompt');
+    const saveSettingsBtn = document.getElementById('saveSettings');
+    const statusSettings = document.getElementById('statusSettings');
 
-        fetchModels(result.model);
+    const DEFAULTS = {
+        ollama: { endpoint: 'http://localhost:11434', model: 'llama3' },
+        openai: { endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+        gemini: { endpoint: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-1.5-flash' },
+        claude: { endpoint: 'https://api.anthropic.com/v1', model: 'claude-3-5-sonnet-20240620' }
+    };
+
+    const setModelUIMode = (mode) => {
+        if (mode === 'select') {
+            modelInput.style.display = 'none';
+            modelSelect.style.display = 'block';
+            toggleManualBtn.style.display = 'block';
+        } else {
+            modelInput.style.display = 'block';
+            modelSelect.style.display = 'none';
+            toggleManualBtn.style.display = 'none';
+        }
+    };
+
+    toggleManualBtn.addEventListener('click', () => {
+        setModelUIMode('manual');
+        modelInput.focus();
     });
 
-    // 2. Instant Mode Change Listener
-    displayModeSelect.addEventListener('change', () => {
-        const newMode = displayModeSelect.value;
-        chrome.storage.local.set({ displayMode: newMode });
-        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-            if (tabs[0]) {
-                chrome.tabs.sendMessage(tabs[0].id, {
-                    action: "updateDisplayMode",
-                    mode: newMode
-                });
-            }
-        });
+    modelSelect.addEventListener('change', () => {
+        modelInput.value = modelSelect.value;
     });
 
-    async function fetchModels(savedModel) {
+    settingsToggle.addEventListener('click', () => {
+        if (mainView.style.display !== 'none') {
+            mainView.style.display = 'none';
+            settingsView.style.display = 'block';
+            headerTitle.textContent = 'Configuration';
+            settingsToggle.textContent = '←';
+        } else {
+            mainView.style.display = 'block';
+            settingsView.style.display = 'none';
+            headerTitle.textContent = 'Immersion';
+            settingsToggle.textContent = '⚙️';
+        }
+    });
+
+    providerSelect.addEventListener('change', () => {
+        const p = providerSelect.value;
+        apiKeyField.style.display = p === 'ollama' ? 'none' : 'block';
+        setModelUIMode('manual');
+
+        if (!endpointInput.value || endpointInput.value.includes('localhost') || endpointInput.value.includes('api.openai') || endpointInput.value.includes('anthropic') || endpointInput.value.includes('googleapis')) {
+            endpointInput.value = DEFAULTS[p].endpoint;
+        }
+
+        modelInput.value = DEFAULTS[p].model;
+        modelInput.placeholder = `e.g. ${DEFAULTS[p].model}`;
+        statusSettings.textContent = '';
+    });
+
+    chrome.storage.local.get(null, (data) => {
+        if (data.enabled !== undefined) enabledInput.checked = data.enabled;
+        if (data.language) langInput.value = data.language;
+        if (data.scope) scopeSelect.value = data.scope;
+        if (data.allowDuplicates !== undefined) allowDuplicatesInput.checked = data.allowDuplicates; // New
+        if (data.percentage) percentageInput.value = data.percentage;
+        if (data.displayMode) displayModeSelect.value = data.displayMode;
+
+        if (data.provider) {
+            providerSelect.value = data.provider;
+            apiKeyField.style.display = data.provider === 'ollama' ? 'none' : 'block';
+        }
+        if (data.endpoint) endpointInput.value = data.endpoint;
+        if (data.apiKey) apiKeyInput.value = data.apiKey;
+        if (data.model) modelInput.value = data.model;
+        if (data.customPrompt) customPromptInput.value = data.customPrompt;
+    });
+
+    fetchModelsBtn.addEventListener('click', async () => {
+        const p = providerSelect.value;
+        let ep = endpointInput.value.replace(/\/$/, '');
+        const key = apiKeyInput.value;
+
+        modelSelect.innerHTML = '';
+        statusSettings.textContent = 'Fetching models...';
+        statusSettings.className = 'status';
+
         try {
-            const response = await fetch('http://localhost:11434/api/tags');
-            if (!response.ok) throw new Error('Failed to connect');
-            const data = await response.json();
-            const models = data.models || [];
+            let models = [];
 
-            modelSelect.innerHTML = '';
-            if (models.length === 0) {
-                modelSelect.add(new Option("No models found (run 'ollama pull')", ""));
-                return;
+            if (p === 'ollama') {
+                try {
+                    const res = await fetch(`${ep}/api/tags?t=${Date.now()}`);
+                    if (!res.ok) throw new Error('Connection failed');
+                    const json = await res.json();
+                    models = json.models.map(m => m.name);
+                } catch (err) {
+                    if (ep.includes('localhost')) {
+                        console.log("Retrying with 127.0.0.1...");
+                        const altEp = ep.replace('localhost', '127.0.0.1');
+                        const res = await fetch(`${altEp}/api/tags`);
+                        if (!res.ok) throw new Error('Connection failed on 127.0.0.1');
+                        const json = await res.json();
+                        models = json.models.map(m => m.name);
+                    } else {
+                        throw err;
+                    }
+                }
+            }
+            else if (p === 'openai') {
+                if (!key) throw new Error('Enter API Key first');
+                const res = await fetch(`${ep}/models`, { headers: { 'Authorization': `Bearer ${key}` } });
+                if (res.status === 401) throw new Error('Invalid API Key');
+                if (!res.ok) throw new Error('OpenAI connection failed');
+                const json = await res.json();
+                models = json.data.filter(m => m.id.includes('gpt')).map(m => m.id).sort();
+            }
+            else if (p === 'gemini') {
+                models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro'];
+            }
+            else if (p === 'claude') {
+                models = ['claude-3-5-sonnet-20240620', 'claude-3-opus-20240229', 'claude-3-haiku-20240307'];
             }
 
-            models.forEach(m => {
-                const option = document.createElement('option');
-                option.value = m.name;
-                option.text = m.name;
-                modelSelect.appendChild(option);
-            });
+            if (models.length > 0) {
+                models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.text = m;
+                    modelSelect.appendChild(opt);
+                });
 
-            if (savedModel && models.some(m => m.name === savedModel)) {
-                modelSelect.value = savedModel;
+                setModelUIMode('select');
+
+                if (models.includes(modelInput.value)) {
+                    modelSelect.value = modelInput.value;
+                } else {
+                    modelSelect.value = models[0];
+                    modelInput.value = models[0];
+                }
+
+                statusSettings.textContent = `Success: ${models.length} models loaded.`;
+                statusSettings.className = 'status success';
             } else {
-                const defaultModel = models.find(m => m.name.includes('llama3')) || models[0];
-                modelSelect.value = defaultModel.name;
+                throw new Error('No models found');
             }
-            statusDiv.textContent = '';
 
-        } catch (error) {
-            console.error(error);
-            modelSelect.innerHTML = '<option value="" disabled selected>Connection Failed</option>';
-            statusDiv.textContent = 'Error: Is Ollama running?';
-            statusDiv.className = 'status error';
+        } catch (e) {
+            console.error(e);
+            setModelUIMode('manual');
+            if (p === 'ollama') {
+                statusSettings.textContent = 'Error: Is Ollama running with OLLAMA_ORIGINS="*"?';
+            } else {
+                statusSettings.textContent = `Error: ${e.message}`;
+            }
+            statusSettings.className = 'status error';
         }
-    }
+    });
 
-    // Save settings
-    saveBtn.addEventListener('click', () => {
-        const selectedModel = modelSelect.value;
-        if (!selectedModel) {
-            statusDiv.textContent = 'Error: No model selected.';
-            statusDiv.className = 'status error';
-            return;
-        }
-
+    const saveAll = (btn, statusEl) => {
         const settings = {
             enabled: enabledInput.checked,
-            scope: scopeSelect.value, // New
-            displayMode: displayModeSelect.value,
+            language: langInput.value,
+            scope: scopeSelect.value,
+            allowDuplicates: allowDuplicatesInput.checked, // New
             percentage: parseInt(percentageInput.value) || 10,
-            model: selectedModel,
-            language: langInput.value.trim() || 'Spanish'
+            displayMode: displayModeSelect.value,
+            provider: providerSelect.value,
+            endpoint: endpointInput.value.replace(/\/$/, ''),
+            apiKey: apiKeyInput.value.trim(),
+            model: modelInput.value.trim(),
+            customPrompt: customPromptInput.value.trim()
         };
 
         chrome.storage.local.set(settings, () => {
-            statusDiv.textContent = 'Settings saved! Refresh page to apply.';
-            statusDiv.className = 'status success';
-            setTimeout(() => statusDiv.textContent = '', 3000);
+            statusEl.textContent = 'Settings Saved!';
+            statusEl.className = 'status success';
+
+            chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+                if (tabs[0]) {
+                    chrome.tabs.sendMessage(tabs[0].id, {
+                        action: "updateDisplayMode",
+                        mode: settings.displayMode
+                    });
+                }
+            });
+            setTimeout(() => statusEl.textContent = '', 2000);
         });
-    });
+    };
+
+    saveMainBtn.addEventListener('click', () => saveAll(saveMainBtn, statusMain));
+    saveSettingsBtn.addEventListener('click', () => saveAll(saveSettingsBtn, statusSettings));
 });

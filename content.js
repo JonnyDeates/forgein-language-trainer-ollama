@@ -3,6 +3,7 @@ let observer;
 let scanTimeout;
 let processedNodes = new WeakSet();
 let recentTranslations = new Set();
+let translationCache = new Map();
 
 function uuidv4() {
     return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
@@ -20,17 +21,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function init() {
-    globalSettings = await chrome.storage.local.get(['enabled', 'scope', 'displayMode', 'percentage', 'model', 'language']);
+    globalSettings = await chrome.storage.local.get([
+        'enabled', 'scope', 'allowDuplicates', 'displayMode', 'percentage',
+        'model', 'language',
+        'provider', 'endpoint', 'apiKey', 'customPrompt'
+    ]);
 
     if (globalSettings.enabled === false) return;
 
+    globalSettings.provider = globalSettings.provider || 'ollama';
+    globalSettings.endpoint = globalSettings.endpoint || 'http://localhost:11434';
     globalSettings.model = globalSettings.model || 'llama3';
     globalSettings.language = globalSettings.language || 'Spanish';
     globalSettings.percentage = globalSettings.percentage || 10;
     globalSettings.displayMode = globalSettings.displayMode || 'below';
     globalSettings.scope = globalSettings.scope || 'sentences';
+    globalSettings.allowDuplicates = globalSettings.allowDuplicates === true;
 
-    console.log(`Ollama Extension: Active. Scope: ${globalSettings.scope}. Target: ${globalSettings.percentage}%`);
+    console.log(`Ollama Extension: Active. Scope: ${globalSettings.scope}. Duplicates: ${globalSettings.allowDuplicates}`);
 
     requestScan(document.body);
     startObserver();
@@ -42,7 +50,6 @@ function startObserver() {
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
                 if (node.nodeType === 1) {
-                    // Check for any of our classes to prevent loops
                     if (node.matches('.ollama-pending, .ollama-translated, .ollama-interlinear-container, .ollama-word-wrapper')) return;
                     if (node.closest && node.closest('.ollama-translated')) return;
                     shouldScan = true;
@@ -71,8 +78,6 @@ function executeScan(rootNode) {
         {
             acceptNode: (node) => {
                 if (!node.parentElement) return NodeFilter.FILTER_REJECT;
-
-                // CRITICAL FIX: Added .ollama-word-wrapper to the ignore list
                 if (node.parentElement.closest('.ollama-pending, .ollama-translated, .ollama-interlinear-container, .ollama-word-wrapper')) return NodeFilter.FILTER_REJECT;
 
                 const tag = node.parentElement.tagName.toLowerCase();
@@ -81,8 +86,7 @@ function executeScan(rootNode) {
                 if (processedNodes.has(node.parentElement)) return NodeFilter.FILTER_REJECT;
 
                 const text = node.nodeValue.trim();
-                if (text.length < 3) return NodeFilter.FILTER_REJECT;
-
+                if (text.length < 2) return NodeFilter.FILTER_REJECT;
                 if (!/[a-zA-Z]/.test(text)) return NodeFilter.FILTER_REJECT;
 
                 return NodeFilter.FILTER_ACCEPT;
@@ -97,7 +101,6 @@ function executeScan(rootNode) {
 
     if (textNodes.length === 0) return;
 
-    // Mark parents as processed
     textNodes.forEach(node => {
         if (node.parentElement) processedNodes.add(node.parentElement);
     });
@@ -114,9 +117,7 @@ function processSentences(nodes) {
     const candidates = nodes.filter(node => node.nodeValue.trim().length > 8);
     const selectedNodes = candidates.filter(() => Math.random() < threshold);
 
-    if (selectedNodes.length > 0) {
-        sendBatch(selectedNodes, 'sentence');
-    }
+    if (selectedNodes.length > 0) sendBatch(selectedNodes, 'sentence');
 }
 
 function processWords(nodes) {
@@ -125,30 +126,53 @@ function processWords(nodes) {
 
     nodes.forEach(node => {
         const text = node.nodeValue;
-        const parts = text.split(/([a-zA-Z\u00C0-\u00FF]{3,})/);
+        const parts = text.split(/([a-zA-Z\u00C0-\u00FF]{2,})/);
 
         let hasTranslation = false;
         const fragment = document.createDocumentFragment();
 
         parts.forEach(part => {
-            // Check if valid word, pass threshold, AND check recentTranslations to prevent duplicates
-            if (/[a-zA-Z\u00C0-\u00FF]{3,}/.test(part) && Math.random() < threshold && !recentTranslations.has(part)) {
+            if (/[a-zA-Z\u00C0-\u00FF]{2,}/.test(part) && Math.random() < threshold) {
 
-                recentTranslations.add(part);
-                setTimeout(() => recentTranslations.delete(part), 10000); // Clear anti-flap cache after 10s
+                if (globalSettings.allowDuplicates && translationCache.has(part)) {
+                    const cachedTrans = translationCache.get(part);
+                    const id = uuidv4();
+                    const span = document.createElement('span');
+                    span.dataset.ollamaId = id;
+                    span.dataset.original = part;
+                    span.dataset.translated = cachedTrans;
+                    span.textContent = part;
+                    span.className = 'ollama-pending';
+                    span.dataset.scope = 'word';
 
-                const id = uuidv4();
-                const span = document.createElement('span');
-                span.dataset.ollamaId = id;
-                span.dataset.original = part;
-                span.dataset.translated = "";
-                span.textContent = part;
-                span.className = 'ollama-pending';
-                span.dataset.scope = 'word';
+                    fragment.appendChild(span);
+                    hasTranslation = true;
 
-                fragment.appendChild(span);
-                batch.push({ id: id, original: part });
-                hasTranslation = true;
+                    setTimeout(() => {
+                        renderNode(span, globalSettings.displayMode);
+                    }, 0);
+
+                }
+                else if (!recentTranslations.has(part)) {
+                    recentTranslations.add(part);
+                    setTimeout(() => recentTranslations.delete(part), 10000);
+
+                    const id = uuidv4();
+                    const span = document.createElement('span');
+                    span.dataset.ollamaId = id;
+                    span.dataset.original = part;
+                    span.dataset.translated = "";
+                    span.textContent = part;
+                    span.className = 'ollama-pending';
+                    span.dataset.scope = 'word';
+
+                    fragment.appendChild(span);
+                    batch.push({ id: id, original: part });
+                    hasTranslation = true;
+                }
+                else {
+                    fragment.appendChild(document.createTextNode(part));
+                }
 
             } else {
                 fragment.appendChild(document.createTextNode(part));
@@ -198,9 +222,12 @@ function sendBatchToBackground(batch, scope) {
 
     port.onMessage.addListener((msg) => {
         if (msg.type === "update") {
+            if (msg.data && msg.data.original && msg.data.translated) {
+                translationCache.set(msg.data.original, msg.data.translated);
+            }
             applySingleTranslation(msg.data);
         } else if (msg.type === "error") {
-            console.error("Ollama Stream Error:", msg.message);
+            console.error("Stream Error:", msg.message);
             document.querySelectorAll('.ollama-pending').forEach(el => el.classList.remove('ollama-pending'));
         }
     });
@@ -210,7 +237,11 @@ function sendBatchToBackground(batch, scope) {
         texts: batch,
         model: globalSettings.model,
         language: globalSettings.language,
-        scope: scope
+        scope: scope,
+        provider: globalSettings.provider,
+        endpoint: globalSettings.endpoint,
+        apiKey: globalSettings.apiKey,
+        customPrompt: globalSettings.customPrompt
     });
 }
 
@@ -245,13 +276,15 @@ function renderNode(span, mode) {
 
     if (!translated) return;
 
+    // FIX: I removed the check that blocked updates.
+    // We allow re-rendering even if it already has the class,
+    // because we reconstruct the innerHTML from scratch below.
+
     const newSpan = span.cloneNode(true);
     span.parentNode.replaceChild(newSpan, span);
     span = newSpan;
-
-    // FIX: Ensure the wrapper ALWAYS has the 'ollama-translated' class
-    // This prevents the scanner from picking it up again as a "new" text node.
     span.classList.add('ollama-translated');
+    span.classList.remove('ollama-pending');
 
     const attachListener = (element) => {
         element.addEventListener('click', (e) => {
@@ -265,22 +298,21 @@ function renderNode(span, mode) {
         span.textContent = translated;
         span.classList.add('ollama-translated-highlight');
         span.classList.remove('ollama-interlinear-container');
-        span.classList.remove('ollama-word-wrapper'); // clean up
+        span.classList.remove('ollama-word-wrapper');
         span.title = "Original: " + original + " (Click to Listen)";
         attachListener(span);
 
     } else {
         if (scope === 'word') {
+            // In 'Below' mode for Words, we use the Inline style: Word (Translated)
             span.innerHTML = `${original} <span class="ollama-sub-text-inline" title="Click to Listen">(${translated})</span>`;
-
-            span.classList.add('ollama-word-wrapper'); // Add specific marker for words
+            span.classList.add('ollama-word-wrapper');
             span.classList.remove('ollama-interlinear-container');
             span.classList.remove('ollama-translated-highlight');
-
             const subText = span.querySelector('.ollama-sub-text-inline');
             if(subText) attachListener(subText);
-
         } else {
+            // In 'Below' mode for Sentences, we use the Block style
             span.innerHTML = `${original}<br><span class="ollama-sub-text" title="Click to Listen">${translated} 🔊</span>`;
             span.classList.add('ollama-interlinear-container');
             span.classList.remove('ollama-translated-highlight');
