@@ -109,9 +109,9 @@ async function handleBatch(port, request, checkConnection) {
             } catch (err) {
                 console.error(`Provider [${activeProvider}] Error:`, err);
                 // Send error to UI so user knows why it stopped
-                if (err.message.includes("429") || err.message.includes("Quota")) {
-                    safeSend({ type: "error", message: `API Limit: ${err.message}` });
-                    break; // Stop batch on rate limit
+                if (err.message.includes("429") || err.message.includes("Quota") || err.message.includes("401")) {
+                    safeSend({ type: "error", message: `API Error: ${err.message}` });
+                    break; // Stop batch on critical errors
                 }
             }
         }
@@ -120,27 +120,23 @@ async function handleBatch(port, request, checkConnection) {
 }
 
 // --- ROBUST FETCH WITH RETRY ---
-// Retries on 429 (Rate Limit) and 5xx (Server Errors)
 async function fetchWithRetry(url, options, retries = 3, backoff = 1000) {
     try {
         const res = await fetch(url, options);
 
         if (res.ok) return res;
 
-        // If Rate Limit (429) or Server Error (503, 500), Retry
         if ((res.status === 429 || res.status >= 500) && retries > 0) {
             console.warn(`Request failed with ${res.status}. Retrying in ${backoff}ms...`);
             await new Promise(r => setTimeout(r, backoff));
-            return fetchWithRetry(url, options, retries - 1, backoff * 2); // Exponential backoff
+            return fetchWithRetry(url, options, retries - 1, backoff * 2);
         }
 
-        // If generic error, try to parse detailed message
         const errorText = await res.text();
         throw new Error(`Status ${res.status}: ${errorText}`);
 
     } catch (err) {
         if (retries > 0 && !err.message.includes("Status")) {
-            // Retry on network errors (e.g. wifi blip)
             console.warn(`Network error. Retrying...`);
             await new Promise(r => setTimeout(r, backoff));
             return fetchWithRetry(url, options, retries - 1, backoff * 2);
@@ -158,7 +154,7 @@ async function callOllama(text, system, endpoint, model) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: model, prompt: prompt, stream: false })
-    }, 1, 1000); // Fewer retries for local
+    }, 1, 1000);
 
     const data = await res.json();
     return data.response;
@@ -182,13 +178,12 @@ async function callOpenAI(text, system, endpoint, key, model) {
     });
 
     const data = await res.json();
-    if (data.error) throw new Error(data.error.message); // Handle internal API errors
+    if (data.error) throw new Error(data.error.message);
     return data.choices[0].message.content;
 }
 
 async function callGemini(text, system, endpoint, key, model) {
     const cleanEndpoint = endpoint.replace(/\/$/, '');
-    // Use header-based auth approach
     const url = `${cleanEndpoint}/models/${model}:generateContent`;
 
     const res = await fetchWithRetry(url, {
@@ -221,7 +216,8 @@ async function callClaude(text, system, endpoint, key, model) {
         headers: {
             'Content-Type': 'application/json',
             'x-api-key': key,
-            'anthropic-version': '2023-06-01'
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
             model: model,
@@ -232,6 +228,7 @@ async function callClaude(text, system, endpoint, key, model) {
     });
 
     const data = await res.json();
+    // Anthropic returns top-level error objects sometimes
     if (data.error) throw new Error(data.error.message);
     return data.content[0].text;
 }
