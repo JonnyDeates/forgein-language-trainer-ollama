@@ -24,6 +24,9 @@
             align-items: center;
         }
         h2 { margin: 0; font-size: 1.1rem; color: #111827; }
+
+        .nav-icons { display: flex; gap: 5px; }
+
         .icon-btn {
             background: none;
             border: none;
@@ -33,6 +36,11 @@
             padding: 5px;
             border-radius: 50%;
             transition: all 0.2s;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .icon-btn:hover { background: #f3f4f6; color: #3b82f6; }
 
@@ -98,7 +106,22 @@
 
         .secondary-btn {
             background: #e5e7eb; color: #374151; margin-right: 10px; width: auto; padding: 8px 15px;
+            border: none; border-radius: 6px; cursor: pointer;
         }
+
+        .danger-btn {
+            width: 100%;
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-bottom: 15px;
+            transition: background 0.2s;
+        }
+        .danger-btn:hover { background-color: #fecaca; }
 
         .flex-row { display: flex; gap: 5px; }
 
@@ -115,7 +138,11 @@
 
 <div class="header">
     <h2 id="headerTitle">Immersion</h2>
-    <button id="settingsToggle" class="icon-btn" title="Settings">⚙️</button>
+    <div class="nav-icons">
+        <!-- Two Icons: Blocklist and Settings -->
+        <button id="blacklistToggle" class="icon-btn" title="Blocked Sites">🚫</button>
+        <button id="settingsToggle" class="icon-btn" title="Configuration">⚙️</button>
+    </div>
 </div>
 
 <!-- VIEW 1: MAIN CONTROLS -->
@@ -127,6 +154,8 @@
             <span class="slider"></span>
         </label>
     </div>
+
+    <button id="ignoreSiteBtn" class="danger-btn">🚫 Ignore Current Site</button>
 
     <div class="control-group">
         <label for="language">Target Language</label>
@@ -155,7 +184,6 @@
         </select>
     </div>
 
-    <!-- NEW: Duplicate Toggle -->
     <div class="control-group toggle-container">
         <label for="allowDuplicates" style="margin:0; font-size:0.85rem;">Translate Duplicates</label>
         <label class="switch">
@@ -181,7 +209,7 @@
     <div id="statusMain" class="status"></div>
 </div>
 
-<!-- VIEW 2: SETTINGS -->
+<!-- VIEW 2: SETTINGS (AI CONFIG) -->
 <div id="settingsView" class="view">
     <div class="control-group">
         <label for="provider">AI Provider</label>
@@ -222,6 +250,21 @@
 
     <button id="saveSettings" class="primary-btn">Save Configuration</button>
     <div id="statusSettings" class="status"></div>
+</div>
+
+<!-- VIEW 3: BLOCKLIST (NEW) -->
+<div id="blacklistView" class="view">
+    <p style="font-size: 0.85rem; color: #6b7280; margin-bottom: 10px;">
+        The extension will NOT run on domains listed below.
+    </p>
+
+    <div class="control-group">
+        <label for="blacklist">Ignored Domains (One per line)</label>
+        <textarea id="blacklist" rows="12" placeholder="e.g. google.com&#10;github.com&#10;localhost"></textarea>
+    </div>
+
+    <button id="saveBlacklist" class="primary-btn">Save Blocklist</button>
+    <div id="statusBlacklist" class="status"></div>
 </div>
 
 <script src="popup.js"></script>

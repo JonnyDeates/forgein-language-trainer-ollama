@@ -6,16 +6,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function speakText(text, targetLangCode, sender) {
+    console.log(`Background: TTS Request '${targetLangCode}' -> "${text}"`);
+
     try {
         chrome.tts.stop();
-        const voices = await chrome.tts.getVoices();
 
-        // Cloud Fallback (NixOS/Linux)
+        // 1. Check System Voices
+        let voices = [];
+        try {
+            voices = await chrome.tts.getVoices();
+        } catch (e) {
+            console.warn("Background: Failed to get voices, forcing fallback.", e);
+            voices = [];
+        }
+
+        // 2. DECIDE: System vs Cloud
+        // If 0 voices (NixOS/Linux typical), use Cloud Fallback immediately.
         if (voices.length === 0) {
+            console.log("Background: 0 System voices. Using Cloud Fallback.");
             if (sender && sender.tab) await playCloudAudioViaFetch(text, targetLangCode, sender.tab.id);
             return;
         }
 
+        // 3. Attempt System TTS
         let bestVoice = voices.find(v => v.lang === targetLangCode);
         if (!bestVoice) {
             const prefix = targetLangCode.split('-')[0];
@@ -23,25 +36,49 @@ async function speakText(text, targetLangCode, sender) {
         }
 
         const options = { rate: 0.9, lang: targetLangCode };
-        if (bestVoice) options.voiceName = bestVoice.voiceName;
+        if (bestVoice) {
+            options.voiceName = bestVoice.voiceName;
+            console.log("Background: Using voice", bestVoice.voiceName);
+        } else {
+            console.log("Background: No matching voice, letting OS decide.");
+        }
 
+        // 4. Speak with Error Catching
         chrome.tts.speak(text, options, () => {
-            if (chrome.runtime.lastError) console.error(chrome.runtime.lastError.message);
+            if (chrome.runtime.lastError) {
+                console.error("Background: System TTS Failed:", chrome.runtime.lastError.message);
+                // FAILOVER: If system fails, try cloud immediately
+                console.log("Background: Attempting Cloud Fallback after system error...");
+                if (sender && sender.tab) playCloudAudioViaFetch(text, targetLangCode, sender.tab.id);
+            }
         });
-    } catch (e) { console.error(e); }
+
+    } catch (e) {
+        console.error("Background: Critical TTS failure", e);
+        // Last ditch effort
+        if (sender && sender.tab) playCloudAudioViaFetch(text, targetLangCode, sender.tab.id);
+    }
 }
 
 async function playCloudAudioViaFetch(text, lang, tabId) {
     try {
         const safeText = text.length > 200 ? text.substring(0, 200) : text;
+        // Use 'tw-ob' client for better reliability
         const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(safeText)}&tl=${lang}&client=tw-ob`;
+
+        console.log("Background: Fetching Cloud Audio...");
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Google TTS fetch failed: ${response.status}`);
+
         const blob = await response.blob();
         const reader = new FileReader();
-        reader.onloadend = function() { chrome.tabs.sendMessage(tabId, { action: "playAudioData", data: reader.result }); };
+        reader.onloadend = function() {
+            console.log("Background: Audio downloaded, sending to tab.");
+            chrome.tabs.sendMessage(tabId, { action: "playAudioData", data: reader.result });
+        };
         reader.readAsDataURL(blob);
-    } catch (err) { console.error(err); }
+
+    } catch (err) { console.error("Background: Cloud Audio Error", err); }
 }
 
 // 2. MULTI-PROVIDER TRANSLATION ENGINE
@@ -70,7 +107,6 @@ async function handleBatch(port, request, checkConnection) {
         for (const item of texts) {
             if (!checkConnection()) break;
 
-            // BUILD SYSTEM PROMPT
             let systemInstruction = "";
             if (scope === 'word') {
                 systemInstruction = `Translate the word provided by the user into ${language}. Output ONLY the translated word. No punctuation, no explanations.`;
@@ -80,7 +116,6 @@ async function handleBatch(port, request, checkConnection) {
 
             if (customPrompt) systemInstruction += ` Style: ${customPrompt}`;
 
-            // EXECUTE API CALL
             let translatedText = null;
             try {
                 if (activeProvider === 'ollama') {
@@ -112,7 +147,6 @@ async function handleBatch(port, request, checkConnection) {
 
 // --- API ADAPTERS ---
 async function callOllama(text, system, endpoint, model) {
-    // Remove trailing slash if user added it
     const cleanEndpoint = endpoint.replace(/\/$/, '');
     const prompt = `${system}\nText: ${text}`;
     const res = await fetch(`${cleanEndpoint}/api/generate`, {
@@ -147,21 +181,33 @@ async function callOpenAI(text, system, endpoint, key, model) {
 }
 
 async function callGemini(text, system, endpoint, key, model) {
-    // Gemini endpoint usually: https://generativelanguage.googleapis.com/v1beta
     const cleanEndpoint = endpoint.replace(/\/$/, '');
-    const url = `${cleanEndpoint}/models/${model}:generateContent?key=${key}`;
+    const url = `${cleanEndpoint}/models/${model}:generateContent`;
+
     const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-goog-api-key': key
+        },
         body: JSON.stringify({
             contents: [{
                 parts: [{ text: `${system}\n\nUser Text: ${text}` }]
             }]
         })
     });
-    if (!res.ok) throw new Error(`Gemini Error: ${res.status}`);
+
+    if (!res.ok) {
+        const errorData = await res.text();
+        throw new Error(`Gemini Error ${res.status}: ${errorData}`);
+    }
+
     const data = await res.json();
-    return data.candidates[0].content.parts[0].text;
+    if (data.candidates && data.candidates[0] && data.candidates[0].content) {
+        return data.candidates[0].content.parts[0].text;
+    } else {
+        throw new Error("Gemini returned no content (possibly safety blocked)");
+    }
 }
 
 async function callClaude(text, system, endpoint, key, model) {

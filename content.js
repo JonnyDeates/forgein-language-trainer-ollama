@@ -4,8 +4,8 @@ let scanTimeout;
 let processedNodes = new WeakSet();
 let recentTranslations = new Set();
 let translationCache = new Map();
-// NEW: Track currently playing audio to prevent overlap
 let currentAudio = null;
+let isExtensionActive = false;
 
 function uuidv4() {
     return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
@@ -18,7 +18,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         updateAllTranslations(request.mode);
     }
     else if (request.action === "playAudioData") {
+        console.log("Ollama Content: Received Audio Data from Background.");
         playAudioData(request.data);
+    }
+    else if (request.action === "updateState") {
+        if (request.active) {
+            if (!isExtensionActive) {
+                console.log("Ollama Extension: Re-enabling...");
+                if (request.settings) globalSettings = { ...globalSettings, ...request.settings };
+                init();
+            } else {
+                if (request.settings) globalSettings = { ...globalSettings, ...request.settings };
+            }
+        } else {
+            console.log("Ollama Extension: Disabling via toggle/blacklist...");
+            cleanup();
+        }
     }
 });
 
@@ -26,10 +41,25 @@ async function init() {
     globalSettings = await chrome.storage.local.get([
         'enabled', 'scope', 'allowDuplicates', 'displayMode', 'percentage',
         'model', 'language',
-        'provider', 'endpoint', 'apiKey', 'customPrompt'
+        'provider', 'endpoint', 'apiKey', 'customPrompt', 'blacklist'
     ]);
 
-    if (globalSettings.enabled === false) return;
+    if (globalSettings.enabled === false) {
+        cleanup();
+        return;
+    }
+
+    const currentHost = window.location.hostname.toLowerCase();
+    const blacklist = (globalSettings.blacklist || []).map(d => d.toLowerCase().trim());
+    const isIgnored = blacklist.some(domain =>
+        currentHost === domain || currentHost.endsWith('.' + domain)
+    );
+
+    if (isIgnored) {
+        console.log(`Ollama Extension: Site ${currentHost} is ignored by blacklist rule.`);
+        cleanup();
+        return;
+    }
 
     globalSettings.provider = globalSettings.provider || 'ollama';
     globalSettings.endpoint = globalSettings.endpoint || 'http://localhost:11434';
@@ -40,14 +70,34 @@ async function init() {
     globalSettings.scope = globalSettings.scope || 'sentences';
     globalSettings.allowDuplicates = globalSettings.allowDuplicates === true;
 
-    console.log(`Ollama Extension: Active. Scope: ${globalSettings.scope}. Duplicates: ${globalSettings.allowDuplicates}`);
-
+    isExtensionActive = true;
     requestScan(document.body);
     startObserver();
 }
 
+function cleanup() {
+    isExtensionActive = false;
+    if (observer) { observer.disconnect(); observer = null; }
+    if (scanTimeout) clearTimeout(scanTimeout);
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+
+    const selector = '.ollama-translated, .ollama-pending, .ollama-word-wrapper, .ollama-interlinear-container, .ollama-translated-highlight';
+    document.querySelectorAll(selector).forEach(el => {
+        if (el.dataset.original) {
+            el.parentNode.replaceChild(document.createTextNode(el.dataset.original), el);
+        } else {
+            const rawText = el.innerText.split('(')[0].trim();
+            if (rawText) el.classList.remove('ollama-translated', 'ollama-translated-highlight', 'ollama-pending');
+        }
+    });
+    processedNodes = new WeakSet();
+    recentTranslations.clear();
+}
+
 function startObserver() {
+    if (observer) return;
     observer = new MutationObserver((mutations) => {
+        if (!isExtensionActive) return;
         let shouldScan = false;
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
@@ -59,83 +109,62 @@ function startObserver() {
                 if (node.nodeType === 3) shouldScan = true;
             });
         });
-
         if (shouldScan) requestScan(document.body);
     });
-
     observer.observe(document.body, { childList: true, subtree: true });
 }
 
 function requestScan(rootNode) {
     if (scanTimeout) clearTimeout(scanTimeout);
-    scanTimeout = setTimeout(() => {
-        executeScan(rootNode);
-    }, 1000);
+    scanTimeout = setTimeout(() => { if (isExtensionActive) executeScan(rootNode); }, 1000);
 }
 
 function executeScan(rootNode) {
-    const walker = document.createTreeWalker(
-        rootNode,
-        NodeFilter.SHOW_TEXT,
-        {
-            acceptNode: (node) => {
-                if (!node.parentElement) return NodeFilter.FILTER_REJECT;
-                if (node.parentElement.closest('.ollama-pending, .ollama-translated, .ollama-interlinear-container, .ollama-word-wrapper')) return NodeFilter.FILTER_REJECT;
-
-                const tag = node.parentElement.tagName.toLowerCase();
-                if (['script', 'style', 'noscript', 'code', 'pre', 'textarea', 'input', 'select', 'button', 'meta'].includes(tag)) return NodeFilter.FILTER_REJECT;
-
-                if (processedNodes.has(node.parentElement)) return NodeFilter.FILTER_REJECT;
-
-                const text = node.nodeValue.trim();
-                if (text.length < 2) return NodeFilter.FILTER_REJECT;
-                if (!/[a-zA-Z]/.test(text)) return NodeFilter.FILTER_REJECT;
-
-                return NodeFilter.FILTER_ACCEPT;
-            }
+    if (!isExtensionActive) return;
+    const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => {
+            if (!node.parentElement) return NodeFilter.FILTER_REJECT;
+            if (node.parentElement.closest('.ollama-pending, .ollama-translated, .ollama-interlinear-container, .ollama-word-wrapper')) return NodeFilter.FILTER_REJECT;
+            const tag = node.parentElement.tagName.toLowerCase();
+            if (['script', 'style', 'noscript', 'code', 'pre', 'textarea', 'input', 'select', 'button', 'meta'].includes(tag)) return NodeFilter.FILTER_REJECT;
+            if (processedNodes.has(node.parentElement)) return NodeFilter.FILTER_REJECT;
+            const text = node.nodeValue.trim();
+            if (text.length < 2) return NodeFilter.FILTER_REJECT;
+            if (!/[a-zA-Z]/.test(text)) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
         }
-    );
-
-    let textNodes = [];
-    while (walker.nextNode()) {
-        textNodes.push(walker.currentNode);
-    }
-
-    if (textNodes.length === 0) return;
-
-    textNodes.forEach(node => {
-        if (node.parentElement) processedNodes.add(node.parentElement);
     });
 
-    if (globalSettings.scope === 'words') {
-        processWords(textNodes);
-    } else {
-        processSentences(textNodes);
-    }
+    let textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+    if (textNodes.length === 0) return;
+    textNodes.forEach(node => { if (node.parentElement) processedNodes.add(node.parentElement); });
+
+    if (globalSettings.scope === 'words') processWords(textNodes);
+    else processSentences(textNodes);
 }
 
 function processSentences(nodes) {
+    if (!isExtensionActive) return;
     const threshold = globalSettings.percentage / 100;
     const candidates = nodes.filter(node => node.nodeValue.trim().length > 8);
     const selectedNodes = candidates.filter(() => Math.random() < threshold);
-
     if (selectedNodes.length > 0) sendBatch(selectedNodes, 'sentence');
 }
 
 function processWords(nodes) {
+    if (!isExtensionActive) return;
     const threshold = globalSettings.percentage / 100;
     const batch = [];
 
     nodes.forEach(node => {
         const text = node.nodeValue;
         const parts = text.split(/([a-zA-Z\u00C0-\u00FF]{2,})/);
-
         let hasTranslation = false;
         const fragment = document.createDocumentFragment();
 
         parts.forEach(part => {
             if (/[a-zA-Z\u00C0-\u00FF]{2,}/.test(part) && Math.random() < threshold) {
-
                 if (globalSettings.allowDuplicates && translationCache.has(part)) {
                     const cachedTrans = translationCache.get(part);
                     const id = uuidv4();
@@ -146,19 +175,13 @@ function processWords(nodes) {
                     span.textContent = part;
                     span.className = 'ollama-pending';
                     span.dataset.scope = 'word';
-
                     fragment.appendChild(span);
                     hasTranslation = true;
-
-                    setTimeout(() => {
-                        renderNode(span, globalSettings.displayMode);
-                    }, 0);
-
+                    setTimeout(() => { if (isExtensionActive) renderNode(span, globalSettings.displayMode); }, 0);
                 }
                 else if (!recentTranslations.has(part)) {
                     recentTranslations.add(part);
                     setTimeout(() => recentTranslations.delete(part), 10000);
-
                     const id = uuidv4();
                     const span = document.createElement('span');
                     span.dataset.ollamaId = id;
@@ -167,40 +190,27 @@ function processWords(nodes) {
                     span.textContent = part;
                     span.className = 'ollama-pending';
                     span.dataset.scope = 'word';
-
                     fragment.appendChild(span);
                     batch.push({ id: id, original: part });
                     hasTranslation = true;
-                }
-                else {
-                    fragment.appendChild(document.createTextNode(part));
-                }
-
-            } else {
-                fragment.appendChild(document.createTextNode(part));
-            }
+                } else { fragment.appendChild(document.createTextNode(part)); }
+            } else { fragment.appendChild(document.createTextNode(part)); }
         });
-
-        if (hasTranslation && node.parentNode) {
-            node.parentNode.replaceChild(fragment, node);
-        }
+        if (hasTranslation && node.parentNode) node.parentNode.replaceChild(fragment, node);
     });
 
-    if (batch.length > 0) {
-        sendBatchToBackground(batch, 'word');
-    }
+    if (batch.length > 0) sendBatchToBackground(batch, 'word');
 }
 
 function sendBatch(nodes, scope) {
+    if (!isExtensionActive) return;
     const batch = [];
     nodes.forEach(node => {
         if (!node.parentNode) return;
         const originalText = node.nodeValue.trim();
-
         if (recentTranslations.has(originalText)) return;
         recentTranslations.add(originalText);
         setTimeout(() => recentTranslations.delete(originalText), 10000);
-
         const id = uuidv4();
         const span = document.createElement('span');
         span.dataset.ollamaId = id;
@@ -209,20 +219,17 @@ function sendBatch(nodes, scope) {
         span.textContent = originalText;
         span.className = 'ollama-pending';
         span.dataset.scope = scope;
-
         node.parentNode.replaceChild(span, node);
         batch.push({ id, original: originalText });
     });
-
-    if (batch.length > 0) {
-        sendBatchToBackground(batch, scope);
-    }
+    if (batch.length > 0) sendBatchToBackground(batch, scope);
 }
 
 function sendBatchToBackground(batch, scope) {
+    if (!isExtensionActive) return;
     const port = chrome.runtime.connect({ name: "ollama_stream" });
-
     port.onMessage.addListener((msg) => {
+        if (!isExtensionActive) return;
         if (msg.type === "update") {
             if (msg.data && msg.data.original && msg.data.translated) {
                 translationCache.set(msg.data.original, msg.data.translated);
@@ -233,7 +240,6 @@ function sendBatchToBackground(batch, scope) {
             document.querySelectorAll('.ollama-pending').forEach(el => el.classList.remove('ollama-pending'));
         }
     });
-
     port.postMessage({
         action: "translateBatch",
         texts: batch,
@@ -248,6 +254,7 @@ function sendBatchToBackground(batch, scope) {
 }
 
 function applySingleTranslation(item) {
+    if (!isExtensionActive) return;
     if (!item || item.error) return;
     const span = document.querySelector(`span[data-ollama-id="${item.id}"]`);
     if (span) {
@@ -259,14 +266,7 @@ function applySingleTranslation(item) {
 
 function speakText(text) {
     if (!text) return;
-
-    // 1. Stop any browser-based audio immediately
-    if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-        currentAudio = null;
-    }
-
+    if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; currentAudio = null; }
     const userLang = globalSettings.language.trim().toLowerCase();
     const langMap = { 'spanish': 'es-ES', 'french': 'fr-FR', 'german': 'de-DE', 'italian': 'it-IT', 'japanese': 'ja-JP', 'chinese (mandarin)': 'zh-CN', 'chinese': 'zh-CN', 'korean': 'ko-KR', 'russian': 'ru-RU', 'portuguese': 'pt-BR', 'hindi': 'hi-IN', 'dutch': 'nl-NL', 'polish': 'pl-PL', 'english': 'en-US' };
     const searchCode = langMap[userLang] || 'en-US';
@@ -275,24 +275,15 @@ function speakText(text) {
 }
 
 function playAudioData(base64string) {
-    // 1. Stop previous audio
-    if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-    }
-
-    // 2. Play new
+    if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; }
     const audio = new Audio(base64string);
     currentAudio = audio;
-
     audio.play().catch(e => console.error("Audio Data Playback Error:", e));
-
-    audio.onended = () => {
-        if (currentAudio === audio) currentAudio = null;
-    };
+    audio.onended = () => { if (currentAudio === audio) currentAudio = null; };
 }
 
 function renderNode(span, mode) {
+    if (!isExtensionActive) return;
     const original = span.dataset.original;
     const translated = span.dataset.translated;
     const scope = span.dataset.scope || 'sentence';
@@ -322,35 +313,26 @@ function renderNode(span, mode) {
         attachListener(span);
 
     } else {
-        // BELOW MODE logic
         if (scope === 'word') {
-            // Words: Inline (Word)
             span.innerHTML = `${original} <span class="ollama-sub-text-inline" title="Click to Listen">(${translated})</span>`;
-
             span.classList.add('ollama-word-wrapper');
             span.classList.remove('ollama-interlinear-container');
             span.classList.remove('ollama-translated-highlight');
-
             const subText = span.querySelector('.ollama-sub-text-inline');
             if(subText) attachListener(subText);
-
         } else {
-            // Sentences: New Line (Block)
-            // Using the block style classes
-            span.innerHTML = `${original}<br><span class="ollama-sub-text" title="Click to Listen">${translated}</span>`;
-
+            span.innerHTML = `${original}<br><span class="ollama-sub-text" title="Click to Listen">${translated} 🔊</span>`;
             span.classList.add('ollama-interlinear-container');
             span.classList.remove('ollama-translated-highlight');
             span.classList.remove('ollama-word-wrapper');
             span.removeAttribute('title');
-
-            // Attach listener to the whole block or just the subtext
             attachListener(span);
         }
     }
 }
 
 function updateAllTranslations(newMode) {
+    if (!isExtensionActive) return;
     globalSettings.displayMode = newMode;
     const elements = document.querySelectorAll('span[data-ollama-id]');
     elements.forEach(span => {
