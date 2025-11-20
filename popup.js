@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const enabledInput = document.getElementById('enabled');
-    const displayModeSelect = document.getElementById('displayMode'); // New Select
+    const scopeSelect = document.getElementById('scope');
+    const displayModeSelect = document.getElementById('displayMode');
     const percentageInput = document.getElementById('percentage');
     const modelSelect = document.getElementById('model');
     const langInput = document.getElementById('language');
@@ -8,8 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusDiv = document.getElementById('status');
 
     // 1. Load saved settings
-    chrome.storage.local.get(['enabled', 'displayMode', 'percentage', 'model', 'language'], (result) => {
+    chrome.storage.local.get(['enabled', 'scope', 'displayMode', 'percentage', 'model', 'language'], (result) => {
         if (result.enabled !== undefined) enabledInput.checked = result.enabled;
+        if (result.scope) scopeSelect.value = result.scope;
         if (result.displayMode) displayModeSelect.value = result.displayMode;
         if (result.percentage) percentageInput.value = result.percentage;
         if (result.language) langInput.value = result.language;
@@ -20,11 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 2. Instant Mode Change Listener
     displayModeSelect.addEventListener('change', () => {
         const newMode = displayModeSelect.value;
-
-        // Save immediately
         chrome.storage.local.set({ displayMode: newMode });
-
-        // Send message to active tab to rearrange DOM instantly
         chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
             if (tabs[0]) {
                 chrome.tabs.sendMessage(tabs[0].id, {
@@ -82,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const settings = {
             enabled: enabledInput.checked,
+            scope: scopeSelect.value, // New
             displayMode: displayModeSelect.value,
             percentage: parseInt(percentageInput.value) || 10,
             model: selectedModel,

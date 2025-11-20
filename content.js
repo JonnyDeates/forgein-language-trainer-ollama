@@ -14,14 +14,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "updateDisplayMode") {
         updateAllTranslations(request.mode);
     }
-    // --- NEW: HANDLE RAW AUDIO DATA ---
     else if (request.action === "playAudioData") {
         playAudioData(request.data);
     }
 });
 
 async function init() {
-    globalSettings = await chrome.storage.local.get(['enabled', 'displayMode', 'percentage', 'model', 'language']);
+    globalSettings = await chrome.storage.local.get(['enabled', 'scope', 'displayMode', 'percentage', 'model', 'language']);
 
     if (globalSettings.enabled === false) return;
 
@@ -29,8 +28,9 @@ async function init() {
     globalSettings.language = globalSettings.language || 'Spanish';
     globalSettings.percentage = globalSettings.percentage || 10;
     globalSettings.displayMode = globalSettings.displayMode || 'below';
+    globalSettings.scope = globalSettings.scope || 'sentences';
 
-    console.log(`Ollama Extension: Active. (Target: ${globalSettings.percentage}%)`);
+    console.log(`Ollama Extension: Active. Scope: ${globalSettings.scope}. Target: ${globalSettings.percentage}%`);
 
     requestScan(document.body);
     startObserver();
@@ -42,7 +42,8 @@ function startObserver() {
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
                 if (node.nodeType === 1) {
-                    if (node.matches('.ollama-pending, .ollama-translated, .ollama-interlinear-container')) return;
+                    // Check for any of our classes to prevent loops
+                    if (node.matches('.ollama-pending, .ollama-translated, .ollama-interlinear-container, .ollama-word-wrapper')) return;
                     if (node.closest && node.closest('.ollama-translated')) return;
                     shouldScan = true;
                 }
@@ -70,7 +71,9 @@ function executeScan(rootNode) {
         {
             acceptNode: (node) => {
                 if (!node.parentElement) return NodeFilter.FILTER_REJECT;
-                if (node.parentElement.closest('.ollama-pending, .ollama-translated, .ollama-interlinear-container')) return NodeFilter.FILTER_REJECT;
+
+                // CRITICAL FIX: Added .ollama-word-wrapper to the ignore list
+                if (node.parentElement.closest('.ollama-pending, .ollama-translated, .ollama-interlinear-container, .ollama-word-wrapper')) return NodeFilter.FILTER_REJECT;
 
                 const tag = node.parentElement.tagName.toLowerCase();
                 if (['script', 'style', 'noscript', 'code', 'pre', 'textarea', 'input', 'select', 'button', 'meta'].includes(tag)) return NodeFilter.FILTER_REJECT;
@@ -78,41 +81,97 @@ function executeScan(rootNode) {
                 if (processedNodes.has(node.parentElement)) return NodeFilter.FILTER_REJECT;
 
                 const text = node.nodeValue.trim();
-                if (text.length < 8) return NodeFilter.FILTER_REJECT;
-                if (!/[a-zA-Z]/.test(text)) return NodeFilter.FILTER_REJECT;
+                if (text.length < 3) return NodeFilter.FILTER_REJECT;
 
-                if (recentTranslations.has(text)) return NodeFilter.FILTER_REJECT;
+                if (!/[a-zA-Z]/.test(text)) return NodeFilter.FILTER_REJECT;
 
                 return NodeFilter.FILTER_ACCEPT;
             }
         }
     );
 
-    let candidates = [];
+    let textNodes = [];
     while (walker.nextNode()) {
-        candidates.push(walker.currentNode);
+        textNodes.push(walker.currentNode);
     }
 
-    if (candidates.length === 0) return;
+    if (textNodes.length === 0) return;
 
-    const threshold = globalSettings.percentage / 100;
-    const selectedNodes = candidates.filter(() => Math.random() < threshold);
-
-    candidates.forEach(node => {
+    // Mark parents as processed
+    textNodes.forEach(node => {
         if (node.parentElement) processedNodes.add(node.parentElement);
     });
 
-    if (selectedNodes.length > 0) {
-        sendBatch(selectedNodes);
+    if (globalSettings.scope === 'words') {
+        processWords(textNodes);
+    } else {
+        processSentences(textNodes);
     }
 }
 
-function sendBatch(nodes) {
+function processSentences(nodes) {
+    const threshold = globalSettings.percentage / 100;
+    const candidates = nodes.filter(node => node.nodeValue.trim().length > 8);
+    const selectedNodes = candidates.filter(() => Math.random() < threshold);
+
+    if (selectedNodes.length > 0) {
+        sendBatch(selectedNodes, 'sentence');
+    }
+}
+
+function processWords(nodes) {
+    const threshold = globalSettings.percentage / 100;
+    const batch = [];
+
+    nodes.forEach(node => {
+        const text = node.nodeValue;
+        const parts = text.split(/([a-zA-Z\u00C0-\u00FF]{3,})/);
+
+        let hasTranslation = false;
+        const fragment = document.createDocumentFragment();
+
+        parts.forEach(part => {
+            // Check if valid word, pass threshold, AND check recentTranslations to prevent duplicates
+            if (/[a-zA-Z\u00C0-\u00FF]{3,}/.test(part) && Math.random() < threshold && !recentTranslations.has(part)) {
+
+                recentTranslations.add(part);
+                setTimeout(() => recentTranslations.delete(part), 10000); // Clear anti-flap cache after 10s
+
+                const id = uuidv4();
+                const span = document.createElement('span');
+                span.dataset.ollamaId = id;
+                span.dataset.original = part;
+                span.dataset.translated = "";
+                span.textContent = part;
+                span.className = 'ollama-pending';
+                span.dataset.scope = 'word';
+
+                fragment.appendChild(span);
+                batch.push({ id: id, original: part });
+                hasTranslation = true;
+
+            } else {
+                fragment.appendChild(document.createTextNode(part));
+            }
+        });
+
+        if (hasTranslation && node.parentNode) {
+            node.parentNode.replaceChild(fragment, node);
+        }
+    });
+
+    if (batch.length > 0) {
+        sendBatchToBackground(batch, 'word');
+    }
+}
+
+function sendBatch(nodes, scope) {
     const batch = [];
     nodes.forEach(node => {
         if (!node.parentNode) return;
         const originalText = node.nodeValue.trim();
 
+        if (recentTranslations.has(originalText)) return;
         recentTranslations.add(originalText);
         setTimeout(() => recentTranslations.delete(originalText), 10000);
 
@@ -123,13 +182,18 @@ function sendBatch(nodes) {
         span.dataset.translated = "";
         span.textContent = originalText;
         span.className = 'ollama-pending';
+        span.dataset.scope = scope;
 
         node.parentNode.replaceChild(span, node);
         batch.push({ id, original: originalText });
     });
 
-    if (batch.length === 0) return;
+    if (batch.length > 0) {
+        sendBatchToBackground(batch, scope);
+    }
+}
 
+function sendBatchToBackground(batch, scope) {
     const port = chrome.runtime.connect({ name: "ollama_stream" });
 
     port.onMessage.addListener((msg) => {
@@ -145,7 +209,8 @@ function sendBatch(nodes) {
         action: "translateBatch",
         texts: batch,
         model: globalSettings.model,
-        language: globalSettings.language
+        language: globalSettings.language,
+        scope: scope
     });
 }
 
@@ -161,38 +226,14 @@ function applySingleTranslation(item) {
 
 function speakText(text) {
     if (!text) return;
-
     const userLang = globalSettings.language.trim().toLowerCase();
-    const langMap = {
-        'spanish': 'es-ES',
-        'french': 'fr-FR',
-        'german': 'de-DE',
-        'italian': 'it-IT',
-        'japanese': 'ja-JP',
-        'chinese (mandarin)': 'zh-CN',
-        'chinese': 'zh-CN',
-        'korean': 'ko-KR',
-        'russian': 'ru-RU',
-        'portuguese': 'pt-BR',
-        'hindi': 'hi-IN',
-        'dutch': 'nl-NL',
-        'polish': 'pl-PL',
-        'english': 'en-US'
-    };
-
+    const langMap = { 'spanish': 'es-ES', 'french': 'fr-FR', 'german': 'de-DE', 'italian': 'it-IT', 'japanese': 'ja-JP', 'chinese (mandarin)': 'zh-CN', 'chinese': 'zh-CN', 'korean': 'ko-KR', 'russian': 'ru-RU', 'portuguese': 'pt-BR', 'hindi': 'hi-IN', 'dutch': 'nl-NL', 'polish': 'pl-PL', 'english': 'en-US' };
     const searchCode = langMap[userLang] || 'en-US';
-
     console.log(`Ollama Content: Requesting TTS for (${searchCode})`);
-    chrome.runtime.sendMessage({
-        action: "speak",
-        text: text,
-        lang: searchCode
-    });
+    chrome.runtime.sendMessage({ action: "speak", text: text, lang: searchCode });
 }
 
-// --- NEW: Plays raw Base64 Audio Data ---
 function playAudioData(base64string) {
-    console.log("Ollama Content: Playing Audio Data via Proxy");
     const audio = new Audio(base64string);
     audio.play().catch(e => console.error("Audio Data Playback Error:", e));
 }
@@ -200,12 +241,17 @@ function playAudioData(base64string) {
 function renderNode(span, mode) {
     const original = span.dataset.original;
     const translated = span.dataset.translated;
+    const scope = span.dataset.scope || 'sentence';
 
     if (!translated) return;
 
     const newSpan = span.cloneNode(true);
     span.parentNode.replaceChild(newSpan, span);
     span = newSpan;
+
+    // FIX: Ensure the wrapper ALWAYS has the 'ollama-translated' class
+    // This prevents the scanner from picking it up again as a "new" text node.
+    span.classList.add('ollama-translated');
 
     const attachListener = (element) => {
         element.addEventListener('click', (e) => {
@@ -219,17 +265,29 @@ function renderNode(span, mode) {
         span.textContent = translated;
         span.classList.add('ollama-translated-highlight');
         span.classList.remove('ollama-interlinear-container');
+        span.classList.remove('ollama-word-wrapper'); // clean up
         span.title = "Original: " + original + " (Click to Listen)";
-
         attachListener(span);
 
     } else {
-        span.innerHTML = `${original}<br><span class="ollama-sub-text" title="Click to Listen">${translated}</span>`;
-        span.classList.add('ollama-interlinear-container');
-        span.classList.remove('ollama-translated-highlight');
-        span.removeAttribute('title');
+        if (scope === 'word') {
+            span.innerHTML = `${original} <span class="ollama-sub-text-inline" title="Click to Listen">(${translated})</span>`;
 
-        attachListener(span);
+            span.classList.add('ollama-word-wrapper'); // Add specific marker for words
+            span.classList.remove('ollama-interlinear-container');
+            span.classList.remove('ollama-translated-highlight');
+
+            const subText = span.querySelector('.ollama-sub-text-inline');
+            if(subText) attachListener(subText);
+
+        } else {
+            span.innerHTML = `${original}<br><span class="ollama-sub-text" title="Click to Listen">${translated} 🔊</span>`;
+            span.classList.add('ollama-interlinear-container');
+            span.classList.remove('ollama-translated-highlight');
+            span.classList.remove('ollama-word-wrapper');
+            span.removeAttribute('title');
+            attachListener(span);
+        }
     }
 }
 

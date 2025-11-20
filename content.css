@@ -1,11 +1,11 @@
 /* MODE: REPLACE (Direct Translation) */
 .ollama-translated-highlight {
-    background-color: #e0f2fe; /* Light blue background */
+    background-color: #e0f2fe;
     border-bottom: 2px solid #3b82f6;
-    cursor: pointer; /* CHANGED: Indicates clickable */
+    cursor: pointer;
     color: #0c4a6e;
     border-radius: 3px;
-    user-select: none; /* Optional: makes it feel more like a button/UI element */
+    user-select: none;
 }
 
 .ollama-translated-highlight:hover {
@@ -13,20 +13,20 @@
 }
 
 .ollama-translated-highlight:active {
-    background-color: #7dd3fc; /* Press effect */
+    background-color: #7dd3fc;
     transform: translateY(1px);
 }
 
-/* MODE: BELOW (Interlinear) Container */
+/* MODE: BELOW (Block container) */
 .ollama-interlinear-container {
     display: inline-block;
     vertical-align: top;
     line-height: 1.3;
     margin-bottom: 4px;
-    cursor: pointer; /* CHANGED: Whole block is clickable */
+    cursor: pointer;
 }
 
-/* The Translated Text sitting below */
+/* Sentence Mode sub-text (Block) */
 .ollama-sub-text {
     display: block;
     font-size: 0.85em;
@@ -38,7 +38,21 @@
 }
 
 .ollama-interlinear-container:hover .ollama-sub-text {
-    color: #3b82f6; /* Highlight the translation when hovering the block */
+    color: #3b82f6;
+}
+
+/* NEW: Word Mode sub-text (Inline) */
+.ollama-sub-text-inline {
+    font-size: 0.9em;
+    color: #d97706; /* Amber/Orange to stand out slightly */
+    font-weight: bold;
+    cursor: pointer;
+    margin-left: 2px;
+}
+
+.ollama-sub-text-inline:hover {
+    color: #b45309;
+    text-decoration: underline;
 }
 
 /* Loading state */
