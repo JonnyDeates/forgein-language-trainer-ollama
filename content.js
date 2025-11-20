@@ -4,6 +4,8 @@ let scanTimeout;
 let processedNodes = new WeakSet();
 let recentTranslations = new Set();
 let translationCache = new Map();
+// NEW: Track currently playing audio to prevent overlap
+let currentAudio = null;
 
 function uuidv4() {
     return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
@@ -257,6 +259,14 @@ function applySingleTranslation(item) {
 
 function speakText(text) {
     if (!text) return;
+
+    // 1. Stop any browser-based audio immediately
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        currentAudio = null;
+    }
+
     const userLang = globalSettings.language.trim().toLowerCase();
     const langMap = { 'spanish': 'es-ES', 'french': 'fr-FR', 'german': 'de-DE', 'italian': 'it-IT', 'japanese': 'ja-JP', 'chinese (mandarin)': 'zh-CN', 'chinese': 'zh-CN', 'korean': 'ko-KR', 'russian': 'ru-RU', 'portuguese': 'pt-BR', 'hindi': 'hi-IN', 'dutch': 'nl-NL', 'polish': 'pl-PL', 'english': 'en-US' };
     const searchCode = langMap[userLang] || 'en-US';
@@ -265,8 +275,21 @@ function speakText(text) {
 }
 
 function playAudioData(base64string) {
+    // 1. Stop previous audio
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+    }
+
+    // 2. Play new
     const audio = new Audio(base64string);
+    currentAudio = audio;
+
     audio.play().catch(e => console.error("Audio Data Playback Error:", e));
+
+    audio.onended = () => {
+        if (currentAudio === audio) currentAudio = null;
+    };
 }
 
 function renderNode(span, mode) {
@@ -275,10 +298,6 @@ function renderNode(span, mode) {
     const scope = span.dataset.scope || 'sentence';
 
     if (!translated) return;
-
-    // FIX: I removed the check that blocked updates.
-    // We allow re-rendering even if it already has the class,
-    // because we reconstruct the innerHTML from scratch below.
 
     const newSpan = span.cloneNode(true);
     span.parentNode.replaceChild(newSpan, span);
@@ -303,21 +322,29 @@ function renderNode(span, mode) {
         attachListener(span);
 
     } else {
+        // BELOW MODE logic
         if (scope === 'word') {
-            // In 'Below' mode for Words, we use the Inline style: Word (Translated)
+            // Words: Inline (Word)
             span.innerHTML = `${original} <span class="ollama-sub-text-inline" title="Click to Listen">(${translated})</span>`;
+
             span.classList.add('ollama-word-wrapper');
             span.classList.remove('ollama-interlinear-container');
             span.classList.remove('ollama-translated-highlight');
+
             const subText = span.querySelector('.ollama-sub-text-inline');
             if(subText) attachListener(subText);
+
         } else {
-            // In 'Below' mode for Sentences, we use the Block style
-            span.innerHTML = `${original}<br><span class="ollama-sub-text" title="Click to Listen">${translated} 🔊</span>`;
+            // Sentences: New Line (Block)
+            // Using the block style classes
+            span.innerHTML = `${original}<br><span class="ollama-sub-text" title="Click to Listen">${translated}</span>`;
+
             span.classList.add('ollama-interlinear-container');
             span.classList.remove('ollama-translated-highlight');
             span.classList.remove('ollama-word-wrapper');
             span.removeAttribute('title');
+
+            // Attach listener to the whole block or just the subtext
             attachListener(span);
         }
     }
