@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama Translator</title>
+    <style>
+        body {
+            width: 320px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 15px;
+            background-color: #f9fafb;
+            color: #1f2937;
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: #111827;
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+        }
+        input[type="text"], input[type="number"], select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 0.9rem;
+            background-color: white;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            ring: 2px solid #3b82f6;
+        }
+        select {
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%231f2937%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+            background-repeat: no-repeat;
+            background-position: right .7em top 50%;
+            background-size: .65em auto;
+        }
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #e5e7eb;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 24px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #3b82f6;
+        }
+        input:checked + .slider:before {
+            transform: translateX(16px);
+        }
+        button {
+            width: 100%;
+            background-color: #3b82f6;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #2563eb;
+        }
+        .status {
+            margin-top: 10px;
+            font-size: 0.8rem;
+            text-align: center;
+            color: #6b7280;
+        }
+        .status.error { color: #ef4444; }
+        .status.success { color: #10b981; }
+        .helper-text {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+<h2>Ollama Immersion</h2>
+
+<div class="control-group toggle-container">
+    <label for="enabled" style="margin:0">Enable Extension</label>
+    <label class="switch">
+        <input type="checkbox" id="enabled">
+        <span class="slider"></span>
+    </label>
+</div>
+
+<div class="control-group">
+    <label for="displayMode">Translation Style</label>
+    <select id="displayMode">
+        <option value="below">Below Text (Interlinear)</option>
+        <option value="replace">Replace Text (Highlighted)</option>
+    </select>
+</div>
+
+<div class="control-group">
+    <label for="percentage">Immersion %</label>
+    <input type="number" id="percentage" min="1" max="100" value="10">
+    <div class="helper-text">Percentage of page to translate</div>
+</div>
+
+<div class="control-group">
+    <label for="model">Ollama Model</label>
+    <select id="model">
+        <option value="" disabled selected>Connecting to Ollama...</option>
+    </select>
+</div>
+
+<div class="control-group">
+    <label for="language">Target Language</label>
+    <select id="language">
+        <option value="Spanish">Spanish</option>
+        <option value="French">French</option>
+        <option value="German">German</option>
+        <option value="Italian">Italian</option>
+        <option value="Japanese">Japanese</option>
+        <option value="Chinese">Chinese (Mandarin)</option>
+        <option value="Korean">Korean</option>
+        <option value="Russian">Russian</option>
+        <option value="Portuguese">Portuguese</option>
+        <option value="Hindi">Hindi</option>
+        <option value="Dutch">Dutch</option>
+        <option value="Polish">Polish</option>
+        <option value="English">English</option>
+    </select>
+</div>
+
+<button id="save">Save Settings</button>
+<div id="status" class="status"></div>
+
+<script src="popup.js"></script>
+</body>
+</html>
