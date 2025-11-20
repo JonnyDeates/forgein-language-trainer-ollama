@@ -18,45 +18,64 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         updateAllTranslations(request.mode);
     }
     else if (request.action === "playAudioData") {
-        console.log("Ollama Content: Received Audio Data from Background.");
         playAudioData(request.data);
     }
     else if (request.action === "updateState") {
         if (request.active) {
             if (!isExtensionActive) {
-                console.log("Ollama Extension: Re-enabling...");
+                // Enabling from disabled state
+                console.log("Ollama Extension: Enabling...");
                 if (request.settings) globalSettings = { ...globalSettings, ...request.settings };
                 init();
             } else {
-                if (request.settings) globalSettings = { ...globalSettings, ...request.settings };
+                // Already active - Check for Structural Changes
+                const newSettings = request.settings;
+                const oldScope = globalSettings.scope;
+                const oldLang = globalSettings.language;
+                const oldPerc = globalSettings.percentage;
+
+                // Update local reference
+                if (newSettings) globalSettings = { ...globalSettings, ...newSettings };
+
+                // Detect if we need a Hard Reset (Re-scan) or just a Soft Update (Style)
+                const needsReset = (newSettings.scope !== oldScope) ||
+                    (newSettings.language !== oldLang) ||
+                    (newSettings.percentage !== oldPerc);
+
+                if (needsReset) {
+                    console.log("Ollama Extension: Settings changed, re-scanning...");
+                    cleanup(); // Wipe old
+                    init();    // Start new
+                } else if (globalSettings.displayMode) {
+                    // Just style update
+                    updateAllTranslations(globalSettings.displayMode);
+                }
             }
         } else {
-            console.log("Ollama Extension: Disabling via toggle/blacklist...");
+            // Disabling
+            console.log("Ollama Extension: Disabling...");
             cleanup();
         }
     }
 });
 
 async function init() {
-    globalSettings = await chrome.storage.local.get([
-        'enabled', 'scope', 'allowDuplicates', 'displayMode', 'percentage',
-        'model', 'language',
-        'provider', 'endpoint', 'apiKey', 'customPrompt', 'blacklist'
-    ]);
-
-    if (globalSettings.enabled === false) {
-        cleanup();
-        return;
+    if (!globalSettings.language) {
+        globalSettings = await chrome.storage.local.get([
+            'enabled', 'scope', 'allowDuplicates', 'displayMode', 'percentage',
+            'model', 'language',
+            'provider', 'endpoint', 'apiKey', 'customPrompt', 'blacklist'
+        ]);
     }
+
+    if (globalSettings.enabled === false) { cleanup(); return; }
 
     const currentHost = window.location.hostname.toLowerCase();
     const blacklist = (globalSettings.blacklist || []).map(d => d.toLowerCase().trim());
-    const isIgnored = blacklist.some(domain =>
-        currentHost === domain || currentHost.endsWith('.' + domain)
-    );
+    const isIgnored = blacklist.some(domain => currentHost === domain || currentHost.endsWith('.' + domain));
 
     if (isIgnored) {
-        console.log(`Ollama Extension: Site ${currentHost} is ignored by blacklist rule.`);
+        console.log("Ollama Extension: Site ignored.");
         cleanup();
         return;
     }
@@ -71,6 +90,8 @@ async function init() {
     globalSettings.allowDuplicates = globalSettings.allowDuplicates === true;
 
     isExtensionActive = true;
+    console.log(`Ollama Extension: Active. Scope: ${globalSettings.scope}`);
+
     requestScan(document.body);
     startObserver();
 }
@@ -82,12 +103,19 @@ function cleanup() {
     if (currentAudio) { currentAudio.pause(); currentAudio = null; }
 
     const selector = '.ollama-translated, .ollama-pending, .ollama-word-wrapper, .ollama-interlinear-container, .ollama-translated-highlight';
-    document.querySelectorAll(selector).forEach(el => {
+    const elements = document.querySelectorAll(selector);
+
+    elements.forEach(el => {
         if (el.dataset.original) {
-            el.parentNode.replaceChild(document.createTextNode(el.dataset.original), el);
+            const textNode = document.createTextNode(el.dataset.original);
+            el.parentNode.replaceChild(textNode, el);
         } else {
+            // Heuristic fallback
             const rawText = el.innerText.split('(')[0].trim();
-            if (rawText) el.classList.remove('ollama-translated', 'ollama-translated-highlight', 'ollama-pending');
+            if (rawText) {
+                const textNode = document.createTextNode(rawText);
+                el.parentNode.replaceChild(textNode, el);
+            }
         }
     });
     processedNodes = new WeakSet();
@@ -116,7 +144,9 @@ function startObserver() {
 
 function requestScan(rootNode) {
     if (scanTimeout) clearTimeout(scanTimeout);
-    scanTimeout = setTimeout(() => { if (isExtensionActive) executeScan(rootNode); }, 1000);
+    scanTimeout = setTimeout(() => {
+        if (isExtensionActive) executeScan(rootNode);
+    }, 1000);
 }
 
 function executeScan(rootNode) {
@@ -156,7 +186,6 @@ function processWords(nodes) {
     if (!isExtensionActive) return;
     const threshold = globalSettings.percentage / 100;
     const batch = [];
-
     nodes.forEach(node => {
         const text = node.nodeValue;
         const parts = text.split(/([a-zA-Z\u00C0-\u00FF]{2,})/);
@@ -198,7 +227,6 @@ function processWords(nodes) {
         });
         if (hasTranslation && node.parentNode) node.parentNode.replaceChild(fragment, node);
     });
-
     if (batch.length > 0) sendBatchToBackground(batch, 'word');
 }
 

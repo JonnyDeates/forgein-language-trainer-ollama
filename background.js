@@ -6,29 +6,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function speakText(text, targetLangCode, sender) {
-    console.log(`Background: TTS Request '${targetLangCode}' -> "${text}"`);
-
     try {
         chrome.tts.stop();
+        const voices = await chrome.tts.getVoices();
 
-        // 1. Check System Voices
-        let voices = [];
-        try {
-            voices = await chrome.tts.getVoices();
-        } catch (e) {
-            console.warn("Background: Failed to get voices, forcing fallback.", e);
-            voices = [];
-        }
-
-        // 2. DECIDE: System vs Cloud
-        // If 0 voices (NixOS/Linux typical), use Cloud Fallback immediately.
+        // Cloud Fallback (NixOS/Linux)
         if (voices.length === 0) {
-            console.log("Background: 0 System voices. Using Cloud Fallback.");
             if (sender && sender.tab) await playCloudAudioViaFetch(text, targetLangCode, sender.tab.id);
             return;
         }
 
-        // 3. Attempt System TTS
         let bestVoice = voices.find(v => v.lang === targetLangCode);
         if (!bestVoice) {
             const prefix = targetLangCode.split('-')[0];
@@ -36,49 +23,25 @@ async function speakText(text, targetLangCode, sender) {
         }
 
         const options = { rate: 0.9, lang: targetLangCode };
-        if (bestVoice) {
-            options.voiceName = bestVoice.voiceName;
-            console.log("Background: Using voice", bestVoice.voiceName);
-        } else {
-            console.log("Background: No matching voice, letting OS decide.");
-        }
+        if (bestVoice) options.voiceName = bestVoice.voiceName;
 
-        // 4. Speak with Error Catching
         chrome.tts.speak(text, options, () => {
-            if (chrome.runtime.lastError) {
-                console.error("Background: System TTS Failed:", chrome.runtime.lastError.message);
-                // FAILOVER: If system fails, try cloud immediately
-                console.log("Background: Attempting Cloud Fallback after system error...");
-                if (sender && sender.tab) playCloudAudioViaFetch(text, targetLangCode, sender.tab.id);
-            }
+            if (chrome.runtime.lastError) console.error(chrome.runtime.lastError.message);
         });
-
-    } catch (e) {
-        console.error("Background: Critical TTS failure", e);
-        // Last ditch effort
-        if (sender && sender.tab) playCloudAudioViaFetch(text, targetLangCode, sender.tab.id);
-    }
+    } catch (e) { console.error(e); }
 }
 
 async function playCloudAudioViaFetch(text, lang, tabId) {
     try {
         const safeText = text.length > 200 ? text.substring(0, 200) : text;
-        // Use 'tw-ob' client for better reliability
         const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(safeText)}&tl=${lang}&client=tw-ob`;
-
-        console.log("Background: Fetching Cloud Audio...");
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Google TTS fetch failed: ${response.status}`);
-
         const blob = await response.blob();
         const reader = new FileReader();
-        reader.onloadend = function() {
-            console.log("Background: Audio downloaded, sending to tab.");
-            chrome.tabs.sendMessage(tabId, { action: "playAudioData", data: reader.result });
-        };
+        reader.onloadend = function() { chrome.tabs.sendMessage(tabId, { action: "playAudioData", data: reader.result }); };
         reader.readAsDataURL(blob);
-
-    } catch (err) { console.error("Background: Cloud Audio Error", err); }
+    } catch (err) { console.error(err); }
 }
 
 // 2. MULTI-PROVIDER TRANSLATION ENGINE
@@ -137,31 +100,73 @@ async function handleBatch(port, request, checkConnection) {
                     });
                     if (!sent) break;
                 }
+
+                // Add a small delay between requests to be polite to APIs (helps prevent 429)
+                if (activeProvider !== 'ollama') {
+                    await new Promise(r => setTimeout(r, 500));
+                }
+
             } catch (err) {
                 console.error(`Provider [${activeProvider}] Error:`, err);
+                // Send error to UI so user knows why it stopped
+                if (err.message.includes("429") || err.message.includes("Quota")) {
+                    safeSend({ type: "error", message: `API Limit: ${err.message}` });
+                    break; // Stop batch on rate limit
+                }
             }
         }
         safeSend({ type: "complete" });
     } catch (error) { safeSend({ type: "error", message: error.message }); }
 }
 
+// --- ROBUST FETCH WITH RETRY ---
+// Retries on 429 (Rate Limit) and 5xx (Server Errors)
+async function fetchWithRetry(url, options, retries = 3, backoff = 1000) {
+    try {
+        const res = await fetch(url, options);
+
+        if (res.ok) return res;
+
+        // If Rate Limit (429) or Server Error (503, 500), Retry
+        if ((res.status === 429 || res.status >= 500) && retries > 0) {
+            console.warn(`Request failed with ${res.status}. Retrying in ${backoff}ms...`);
+            await new Promise(r => setTimeout(r, backoff));
+            return fetchWithRetry(url, options, retries - 1, backoff * 2); // Exponential backoff
+        }
+
+        // If generic error, try to parse detailed message
+        const errorText = await res.text();
+        throw new Error(`Status ${res.status}: ${errorText}`);
+
+    } catch (err) {
+        if (retries > 0 && !err.message.includes("Status")) {
+            // Retry on network errors (e.g. wifi blip)
+            console.warn(`Network error. Retrying...`);
+            await new Promise(r => setTimeout(r, backoff));
+            return fetchWithRetry(url, options, retries - 1, backoff * 2);
+        }
+        throw err;
+    }
+}
+
 // --- API ADAPTERS ---
+
 async function callOllama(text, system, endpoint, model) {
     const cleanEndpoint = endpoint.replace(/\/$/, '');
     const prompt = `${system}\nText: ${text}`;
-    const res = await fetch(`${cleanEndpoint}/api/generate`, {
+    const res = await fetchWithRetry(`${cleanEndpoint}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: model, prompt: prompt, stream: false })
-    });
-    if (!res.ok) throw new Error(res.statusText);
+    }, 1, 1000); // Fewer retries for local
+
     const data = await res.json();
     return data.response;
 }
 
 async function callOpenAI(text, system, endpoint, key, model) {
     const cleanEndpoint = endpoint.replace(/\/$/, '');
-    const res = await fetch(`${cleanEndpoint}/chat/completions`, {
+    const res = await fetchWithRetry(`${cleanEndpoint}/chat/completions`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -175,16 +180,18 @@ async function callOpenAI(text, system, endpoint, key, model) {
             ]
         })
     });
-    if (!res.ok) throw new Error(`OpenAI Error: ${res.status}`);
+
     const data = await res.json();
+    if (data.error) throw new Error(data.error.message); // Handle internal API errors
     return data.choices[0].message.content;
 }
 
 async function callGemini(text, system, endpoint, key, model) {
     const cleanEndpoint = endpoint.replace(/\/$/, '');
+    // Use header-based auth approach
     const url = `${cleanEndpoint}/models/${model}:generateContent`;
 
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -197,22 +204,19 @@ async function callGemini(text, system, endpoint, key, model) {
         })
     });
 
-    if (!res.ok) {
-        const errorData = await res.text();
-        throw new Error(`Gemini Error ${res.status}: ${errorData}`);
-    }
-
     const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+
     if (data.candidates && data.candidates[0] && data.candidates[0].content) {
         return data.candidates[0].content.parts[0].text;
     } else {
-        throw new Error("Gemini returned no content (possibly safety blocked)");
+        throw new Error("Gemini blocked content (safety filter)");
     }
 }
 
 async function callClaude(text, system, endpoint, key, model) {
     const cleanEndpoint = endpoint.replace(/\/$/, '');
-    const res = await fetch(`${cleanEndpoint}/messages`, {
+    const res = await fetchWithRetry(`${cleanEndpoint}/messages`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -226,7 +230,8 @@ async function callClaude(text, system, endpoint, key, model) {
             messages: [{ role: "user", content: text }]
         })
     });
-    if (!res.ok) throw new Error(`Claude Error: ${res.status}`);
+
     const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
     return data.content[0].text;
 }
