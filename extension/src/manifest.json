@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "AI Osmosis",
+  "version": "1.0.1",
+  "description": "Passively learn a language by translating a percentage of the web using local or cloud AI.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tts"
+  ],
+  "host_permissions": [
+    "http://localhost:11434/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

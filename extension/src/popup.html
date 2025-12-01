@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Osmosis</title>
+    <style>
+        body {
+            width: 340px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 0;
+            margin: 0;
+            background-color: #f9fafb;
+            color: #1f2937;
+        }
+
+        /* Header & Navigation */
+        .header {
+            background: #fff;
+            padding: 15px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h2 { margin: 0; font-size: 1.1rem; color: #111827; }
+
+        .nav-icons { display: flex; gap: 5px; }
+
+        .icon-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.2rem;
+            color: #6b7280;
+            padding: 5px;
+            border-radius: 50%;
+            transition: all 0.2s;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .icon-btn:hover { background: #f3f4f6; color: #3b82f6; }
+
+        /* Views */
+        .view { padding: 15px; display: none; }
+        .view.active { display: block; }
+
+        /* Controls */
+        .control-group { margin-bottom: 15px; }
+        label { display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85rem; color: #374151; }
+
+        input[type="text"], input[type="password"], input[type="number"], select, textarea {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 0.9rem;
+            background-color: white;
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+        }
+
+        /* Toggles */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #e5e7eb;
+        }
+        .switch { position: relative; display: inline-block; width: 40px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc; transition: .4s; border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+            background-color: white; transition: .4s; border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #3b82f6; }
+        input:checked + .slider:before { transform: translateX(16px); }
+
+        /* Buttons */
+        .primary-btn {
+            width: 100%;
+            background-color: #3b82f6;
+            color: white;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .primary-btn:hover { background-color: #2563eb; }
+
+        .secondary-btn {
+            background: #e5e7eb; color: #374151; margin-right: 10px; width: auto; padding: 8px 15px;
+            border: none; border-radius: 6px; cursor: pointer;
+        }
+
+        .danger-btn {
+            width: 100%;
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-bottom: 15px;
+            transition: background 0.2s;
+        }
+        .danger-btn:hover { background-color: #fecaca; }
+
+        .flex-row { display: flex; gap: 5px; }
+
+        /* Status */
+        .status { margin-top: 10px; font-size: 0.8rem; text-align: center; color: #6b7280; min-height: 1.2em; }
+        .status.error { color: #ef4444; }
+        .status.success { color: #10b981; }
+
+        .helper-text { font-size: 0.75rem; color: #6b7280; margin-top: 4px; }
+        .api-key-field { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h2 id="headerTitle">AI Osmosis</h2>
+    <div class="nav-icons">
+        <button id="blacklistToggle" class="icon-btn" title="Blocked Sites">🚫</button>
+        <button id="settingsToggle" class="icon-btn" title="Configuration">⚙️</button>
+    </div>
+</div>
+
+<!-- VIEW 1: MAIN CONTROLS -->
+<div id="mainView" class="view active">
+    <div class="control-group toggle-container">
+        <label for="enabled" style="margin:0">Enable Extension</label>
+        <label class="switch">
+            <input type="checkbox" id="enabled">
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <button id="ignoreSiteBtn" class="danger-btn">🚫 Ignore Current Site</button>
+
+    <div class="control-group">
+        <label for="language">Target Language</label>
+        <select id="language">
+            <option value="Spanish">Spanish</option>
+            <option value="French">French</option>
+            <option value="German">German</option>
+            <option value="Italian">Italian</option>
+            <option value="Japanese">Japanese</option>
+            <option value="Chinese">Chinese (Mandarin)</option>
+            <option value="Korean">Korean</option>
+            <option value="Russian">Russian</option>
+            <option value="Portuguese">Portuguese</option>
+            <option value="Hindi">Hindi</option>
+            <option value="Dutch">Dutch</option>
+            <option value="Polish">Polish</option>
+            <option value="English">English</option>
+        </select>
+    </div>
+
+    <div class="control-group">
+        <label for="scope">Scope</label>
+        <select id="scope">
+            <option value="sentences">Phrases / Sentences</option>
+            <option value="words">Single Words</option>
+        </select>
+    </div>
+
+    <div class="control-group toggle-container">
+        <label for="allowDuplicates" style="margin:0; font-size:0.85rem;">Translate Duplicates</label>
+        <label class="switch">
+            <input type="checkbox" id="allowDuplicates">
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="control-group">
+        <label for="percentage">Immersion Percentage (%)</label>
+        <input type="number" id="percentage" min="1" max="100" value="10">
+    </div>
+
+    <div class="control-group">
+        <label for="displayMode">Style</label>
+        <select id="displayMode">
+            <option value="below">Below / Inline</option>
+            <option value="replace">Replace Text</option>
+        </select>
+    </div>
+
+    <button id="saveMain" class="primary-btn">Save Changes</button>
+    <div id="statusMain" class="status"></div>
+</div>
+
+<!-- VIEW 2: SETTINGS -->
+<div id="settingsView" class="view">
+    <div class="control-group">
+        <label for="provider">AI Provider</label>
+        <select id="provider">
+            <option value="ollama">Ollama (Local)</option>
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Google Gemini</option>
+            <option value="claude">Anthropic Claude</option>
+        </select>
+    </div>
+
+    <div class="control-group">
+        <label for="endpoint">API Endpoint</label>
+        <input type="text" id="endpoint" value="http://localhost:11434">
+        <div class="helper-text">Default: http://localhost:11434</div>
+    </div>
+
+    <div class="control-group api-key-field">
+        <label for="apiKey">API Key</label>
+        <input type="password" id="apiKey" placeholder="sk-...">
+    </div>
+
+    <div class="control-group">
+        <label for="model">Model Name</label>
+        <div class="flex-row">
+            <input type="text" id="modelInput" placeholder="e.g. llama3" style="flex-grow: 1;">
+            <select id="modelSelect" style="display:none; flex-grow: 1;"></select>
+            <button id="toggleManual" class="secondary-btn" style="display:none; margin:0; width: 30px; padding:0;" title="Edit Manually">✎</button>
+            <button id="fetchModels" class="secondary-btn" style="margin:0; width: 40px; padding:0;" title="Fetch Models">↻</button>
+        </div>
+        <div class="helper-text">Click ↻ to load available models</div>
+    </div>
+
+    <div class="control-group">
+        <label for="customPrompt">Custom Instructions (Optional)</label>
+        <textarea id="customPrompt" rows="2" placeholder="e.g. Translate into slang, or 18th century english..."></textarea>
+    </div>
+
+    <button id="saveSettings" class="primary-btn">Save Configuration</button>
+    <div id="statusSettings" class="status"></div>
+</div>
+
+<!-- VIEW 3: BLOCKLIST -->
+<div id="blacklistView" class="view">
+    <p style="font-size: 0.85rem; color: #6b7280; margin-bottom: 10px;">
+        The extension will NOT run on domains listed below.
+    </p>
+
+    <div class="control-group">
+        <label for="blacklist">Ignored Domains (One per line)</label>
+        <textarea id="blacklist" rows="12" placeholder="e.g. google.com&#10;github.com&#10;localhost"></textarea>
+    </div>
+
+    <button id="saveBlacklist" class="primary-btn">Save Blocklist</button>
+    <div id="statusBlacklist" class="status"></div>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "ai-osmosis",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "../node_modules/.bin/cypress open",
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "archiver": "^7.0.0",
+    "cypress": "^13.0.0",
+    "fs-extra": "^11.0.0"
+  }
+}

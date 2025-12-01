@@ -1,0 +1,38 @@
+{
+  "name": "AI OSMOSIS",
+  "homepage": "",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.17",
+    "lucide-react": "^0.554.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.6",
+    "tailwindcss": "^4.1.17",
+    "vite": "^7.2.4"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.2.3",
+    "@types/react-router-dom": "^5.3.3",
+    "@vitejs/plugin-react-swc": "^4.2.2",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "dev": "vite dev --port 5003",
+    "cleanBuild": "rm -rf dist",
+    "build": "vite build",
+    "start": "vite preview",
+    "test": "vitest run"
+  },
+  "eslintConfig": {
+    "extends": "react-app"
+  },
+  "description": "This project is the frontend for AI Osmosis",
+  "main": "index.js",
+  "author": "Jonny Deates",
+  "license": "ISC"
+}

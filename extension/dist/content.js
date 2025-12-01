@@ -90,8 +90,7 @@ async function init() {
     globalSettings.allowDuplicates = globalSettings.allowDuplicates === true;
 
     isExtensionActive = true;
-    console.log(`Ollama Extension: Active. Scope: ${globalSettings.scope}`);
-
+    console.log(`AI Osmosis: Starting. Scope: ${globalSettings.scope}`);
     requestScan(document.body);
     startObserver();
 }

@@ -1,5 +1,38 @@
+// ... (Rest of file is same, only updating the view switcher text) ...
+
+// --- VIEW NAVIGATION ---
+const showView = (viewName) => {
+    mainView.style.display = 'none';
+    settingsView.style.display = 'none';
+    blacklistView.style.display = 'none';
+
+    settingsToggle.textContent = '⚙️';
+    settingsToggle.style.display = 'flex';
+    blacklistToggle.textContent = '🚫';
+    blacklistToggle.style.display = 'flex';
+
+    if (viewName === 'main') {
+        mainView.style.display = 'block';
+        headerTitle.textContent = 'AI Osmosis'; // UPDATED NAME
+    }
+    else if (viewName === 'settings') {
+        settingsView.style.display = 'block';
+        headerTitle.textContent = 'Configuration';
+        settingsToggle.textContent = '←';
+        blacklistToggle.style.display = 'none';
+    }
+    else if (viewName === 'blacklist') {
+        blacklistView.style.display = 'block';
+        headerTitle.textContent = 'Blocked Sites';
+        blacklistToggle.textContent = '←';
+        settingsToggle.style.display = 'none';
+    }
+};
+
+// ... (Rest of logic remains the same) ...
+
+// Need to include full file to ensure the update sticks:
 document.addEventListener('DOMContentLoaded', () => {
-    // UI References
     const mainView = document.getElementById('mainView');
     const settingsView = document.getElementById('settingsView');
     const blacklistView = document.getElementById('blacklistView');
@@ -35,9 +68,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusBlacklist = document.getElementById('statusBlacklist');
 
     let currentHostname = '';
-    let lastSelectedProvider = 'ollama'; // Track previous to save state on switch
+    let lastSelectedProvider = 'ollama';
 
-    // Default configurations for fresh installs
     const DEFAULT_CONFIGS = {
         ollama: { endpoint: 'http://localhost:11434', model: 'llama3', apiKey: '' },
         openai: { endpoint: 'https://api.openai.com/v1', model: 'gpt-4o-mini', apiKey: '' },
@@ -45,10 +77,8 @@ document.addEventListener('DOMContentLoaded', () => {
         claude: { endpoint: 'https://api.anthropic.com/v1', model: 'claude-3-5-sonnet-20240620', apiKey: '' }
     };
 
-    // State container for the separate provider settings
     let providerConfigs = JSON.parse(JSON.stringify(DEFAULT_CONFIGS));
 
-    // --- VIEW NAVIGATION ---
     const showView = (viewName) => {
         mainView.style.display = 'none';
         settingsView.style.display = 'none';
@@ -61,7 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (viewName === 'main') {
             mainView.style.display = 'block';
-            headerTitle.textContent = 'Immersion';
+            headerTitle.textContent = 'AI Osmosis';
         }
         else if (viewName === 'settings') {
             settingsView.style.display = 'block';
@@ -84,7 +114,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (blacklistView.style.display === 'block') showView('main'); else showView('blacklist');
     });
 
-    // --- HELPERS ---
     const setModelUIMode = (mode) => {
         if (mode === 'select') {
             modelInput.style.display = 'none';
@@ -111,33 +140,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Update UI fields from a specific config object
     const loadConfigToUI = (providerKey) => {
         const config = providerConfigs[providerKey] || DEFAULT_CONFIGS[providerKey];
-
         endpointInput.value = config.endpoint;
         apiKeyInput.value = config.apiKey || '';
         modelInput.value = config.model;
-
-        // Reset UI visual state
         apiKeyField.style.display = providerKey === 'ollama' ? 'none' : 'block';
         modelInput.placeholder = `e.g. ${DEFAULT_CONFIGS[providerKey].model}`;
         statusSettings.textContent = '';
-
-        // Reset Model UI to manual input
         setModelUIMode('manual');
     };
 
-    // Capture UI fields into the config object
     const saveUIToConfig = (providerKey) => {
         if (!providerConfigs[providerKey]) providerConfigs[providerKey] = {};
-
         providerConfigs[providerKey].endpoint = endpointInput.value.replace(/\/$/, '');
         providerConfigs[providerKey].apiKey = apiKeyInput.value.trim();
         providerConfigs[providerKey].model = modelInput.value.trim();
     };
 
-    // --- INITIALIZATION ---
     chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
         if (tabs[0] && tabs[0].url && !tabs[0].url.startsWith('chrome://')) {
             try {
@@ -149,7 +169,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     chrome.storage.local.get(null, (data) => {
-        // Main Settings
         if (data.enabled !== undefined) enabledInput.checked = data.enabled;
         if (data.language) langInput.value = data.language;
         if (data.scope) scopeSelect.value = data.scope;
@@ -158,54 +177,37 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data.displayMode) displayModeSelect.value = data.displayMode;
         if (data.customPrompt) customPromptInput.value = data.customPrompt;
 
-        // Load Blacklist
         const blacklist = data.blacklist || [];
         blacklistInput.value = blacklist.join('\n');
         if (currentHostname && blacklist.includes(currentHostname)) {
             setIgnoreButtonState(true);
         }
 
-        // Load Cached Provider Configs
         if (data.providerConfigs) {
             providerConfigs = { ...DEFAULT_CONFIGS, ...data.providerConfigs };
         }
 
-        // Set Current Provider UI
         if (data.provider) {
             providerSelect.value = data.provider;
             lastSelectedProvider = data.provider;
         }
 
-        // Initial Load of fields based on selected provider
         loadConfigToUI(lastSelectedProvider);
     });
 
-    // --- PROVIDER SWITCH LOGIC ---
     providerSelect.addEventListener('change', () => {
         const newProvider = providerSelect.value;
-
-        // 1. Save current UI inputs to the OLD provider's cache slot
         saveUIToConfig(lastSelectedProvider);
-
-        // 2. Load the NEW provider's settings into the UI
         loadConfigToUI(newProvider);
-
-        // 3. Update tracker
         lastSelectedProvider = newProvider;
     });
 
-    // --- SAVE ALL LOGIC ---
     const saveAll = (btn, statusEl) => {
-        // 1. Capture current UI state into the cache object
         saveUIToConfig(providerSelect.value);
-
         const blacklistArr = blacklistInput.value.split('\n').map(s => s.trim()).filter(s => s);
-
-        // 2. Determine current active settings to save flat (for content script ease)
         const currentConfig = providerConfigs[providerSelect.value];
 
         const settings = {
-            // Global Settings
             enabled: enabledInput.checked,
             language: langInput.value,
             scope: scopeSelect.value,
@@ -214,14 +216,10 @@ document.addEventListener('DOMContentLoaded', () => {
             displayMode: displayModeSelect.value,
             customPrompt: customPromptInput.value.trim(),
             blacklist: blacklistArr,
-
-            // Active Provider Settings (Flat for easy access in background/content)
             provider: providerSelect.value,
             endpoint: currentConfig.endpoint,
             apiKey: currentConfig.apiKey,
             model: currentConfig.model,
-
-            // Storage of the separated configs
             providerConfigs: providerConfigs
         };
 
@@ -246,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
-    // --- OTHER EVENTS ---
+    // AUTO SAVE HANDLERS
     enabledInput.addEventListener('change', () => saveAll(null, null));
     scopeSelect.addEventListener('change', () => saveAll(saveMainBtn, statusMain));
     langInput.addEventListener('change', () => saveAll(saveMainBtn, statusMain));
@@ -336,15 +334,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     modelSelect.appendChild(opt);
                 });
                 setModelUIMode('select');
-
-                // Logic to ensure the dropdown matches the text input
-                if (models.includes(modelInput.value)) {
-                    modelSelect.value = modelInput.value;
-                } else {
-                    modelSelect.value = models[0];
-                    modelInput.value = models[0];
-                }
-
+                if (models.includes(modelInput.value)) modelSelect.value = modelInput.value;
+                else { modelSelect.value = models[0]; modelInput.value = models[0]; }
                 statusSettings.textContent = `Success: ${models.length} models loaded.`;
                 statusSettings.className = 'status success';
             } else { throw new Error('No models found'); }
